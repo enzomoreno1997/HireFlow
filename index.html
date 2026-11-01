@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HireFlow ATS</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<style type="text/tailwindcss">
+  @layer components {
+    .btn { @apply rounded-md px-4 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-700 disabled:opacity-50; }
+    .btn-primary { @apply btn bg-teal-700 text-white hover:bg-teal-800; }
+    .btn-ghost { @apply btn border border-slate-300 text-slate-700 hover:bg-slate-50; }
+    .field { @apply mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-700/20; }
+    .card { @apply rounded-xl border border-slate-200 bg-white p-4 sm:p-5; }
+    .link { @apply text-sm font-medium text-teal-800 hover:underline; }
+    .err { @apply mt-1 block text-xs font-normal text-rose-600; }
+  }
+  [x-cloak] { display: none !important; }
+</style>
+<script>
+/* ───────────── Constants & mock AI ───────────── */
+const ME = "Maria Santos";
+const TEAM = ["Maria Santos", "Jose Reyes", "Ana Cruz", "Ben Lim"];
+const SOURCES = ["Career Site", "LinkedIn", "Referral", "Agency"];
+const RECS = ["Strong no", "No", "Yes", "Strong yes"];
+const LEXICON = ["react","typescript","node","python","sql","aws","docker","graphql","css","testing","figma","research","prototyping","excel","salesforce"];
+const BASE = [["Applied","APPLIED"],["Screening","SCREENING"],["Interview","INTERVIEW"],["Offer","OFFER"],["Hired","HIRED"],["Rejected","REJECTED"]];
+// Automated email templates by stage. Variables: {{candidate_name}}, {{job_title}}
+const TEMPLATES = {
+  INTERVIEW: "Interview invitation for {{job_title}}",
+  OFFER: "Your offer for {{job_title}}, {{candidate_name}}",
+  REJECTED: "Update on your {{job_title}} application",
+};
+const STORE_KEY = "hireflow-ats-v1";
+
+const render = (t, v) => t.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => v[k] ?? "");
+const mkStages = (p) => BASE.map(([name, kind]) => ({ id: `${p}-${kind}`, name, kind }));
+const stamp = () => new Date().toLocaleString("en-PH", { dateStyle: "medium", timeStyle: "short" });
+
+/** Mock AI resume parser + matcher. Palitan ng totoong API (LLM/parser) sa production. */
+function analyze(resume, job) {
+  const t = resume.toLowerCase();
+  const req = job.skills.map((s) => s.toLowerCase().trim()).filter(Boolean);
+  const matched = req.filter((s) => t.includes(s));
+  const missing = req.filter((s) => !t.includes(s));
+  const parsed = [...new Set([...LEXICON.filter((s) => new RegExp(`\\b${s}\\b`).test(t)), ...matched])];
+  const y = t.match(/(\d{1,2})\+?\s*(?:years|yrs)/);
+  const years = y ? Number(y[1]) : 0;
+  const skillsPart = req.length ? matched.length / req.length : 1;
+  const expPart = job.minYears ? Math.min(years / job.minYears, 1) : 1;
+  return { score: Math.round((skillsPart * 0.65 + expPart * 0.35) * 100), matched, missing, parsed, years };
+}
+
+/* ───────────── Seed data ───────────── */
+function seedJobs() {
+  return [
+    { id: "j1", title: "Senior Frontend Engineer", department: "Engineering", location: "Manila (Hybrid)", type: "Full-time", salaryMin: 90000, salaryMax: 140000, skills: ["react","typescript","css","testing"], minYears: 5, status: "OPEN", stages: mkStages("j1"), description: "Lead the build of our customer-facing web apps.",
+      questions: [{ id: "q1", label: "Are you authorized to work in the Philippines?", kill: true, mustAnswer: "Yes" }, { id: "q2", label: "Can you start within 60 days?", kill: false, mustAnswer: "Yes" }] },
+    { id: "j2", title: "Product Designer", department: "Design", location: "Remote (PH)", type: "Full-time", salaryMin: 70000, salaryMax: 110000, skills: ["figma","research","prototyping"], minYears: 3, status: "OPEN", stages: mkStages("j2"), description: "Own end-to-end design for our hiring products.",
+      questions: [{ id: "q1", label: "Are you authorized to work in the Philippines?", kill: true, mustAnswer: "Yes" }] },
+    { id: "j3", title: "Sales Operations Analyst", department: "Revenue", location: "Cebu", type: "Contract", salaryMin: 50000, salaryMax: 75000, skills: ["salesforce","excel","sql"], minYears: 2, status: "DRAFT", stages: mkStages("j3"), description: "Keep our revenue data clean and actionable.", questions: [] },
+  ];
+}
+function seedCands(jobs) {
+  const mk = (id, jobId, name, source, kind, resume, days, extra = {}) => {
+    const job = jobs.find((j) => j.id === jobId);
+    return { id, jobId, name, email: `${name.split(" ")[0].toLowerCase()}@example.com`, location: "Metro Manila", source, stageId: `${jobId}-${kind}`, resume,
+      ...analyze(resume, job), flags: [], scorecards: [], notes: [], votes: {}, daysInStage: days, events: [{ label: `Applied via ${source}`, at: "Oct 2026" }], ...extra };
+  };
+  return [
+    mk("c1","j1","Camille Dizon","LinkedIn","INTERVIEW","Senior frontend engineer, 7 years building React and TypeScript apps. CSS architecture, testing with Jest.",3,{
+      scorecards:[{by:"Jose Reyes",tech:5,comm:4,culture:4,rec:"Strong yes",summary:"Excellent system design and clear communicator."}], votes:{"Jose Reyes":true},
+      notes:[{by:"Ana Cruz",body:"Strong portfolio. @MariaSantos please schedule the panel.",at:"Oct 28"}] }),
+    mk("c2","j1","Rafael Mendoza","Career Site","SCREENING","Frontend developer with 4 years React experience and some TypeScript.",9),
+    mk("c3","j1","Isabel Navarro","Referral","OFFER","Staff engineer, 9 years. React, TypeScript, testing, CSS, Node, AWS.",2,{votes:{"Jose Reyes":true,"Ana Cruz":true}}),
+    mk("c4","j1","Lorenzo Tan","Agency","APPLIED","Backend developer, 3 years Python and SQL.",1,{flags:["FLAG: Can you start within 60 days?"]}),
+    mk("c5","j1","Patricia Go","Career Site","HIRED","Lead engineer, 8 years. React, TypeScript, testing, css.",0),
+    mk("c6","j2","Andrea Villanueva","LinkedIn","INTERVIEW","Product designer, 5 years. Figma, user research, prototyping.",5),
+    mk("c7","j2","Miguel Ramos","Referral","APPLIED","UI designer with 2 years experience in Figma.",4),
+    mk("c8","j2","Sofia Castillo","Career Site","SCREENING","Designer, 3 years. Figma and prototyping.",12),
+    mk("c9","j1","Daniel Uy","LinkedIn","REJECTED","Junior developer, 1 year of HTML.",6,{flags:["KILL: Are you authorized to work in the Philippines?"]}),
+  ];
+}
+
+/* ───────────── Alpine app ───────────── */
+function ats() {
+  const blankJob = () => ({ title:"", department:"", location:"", type:"Full-time", salaryMin:"", salaryMax:"", skills:"", minYears:0, description:"" });
+  const blankAdd = () => ({ name:"", email:"", source:SOURCES[0], resume:"", answers:{} });
+  return {
+    TEAM, SOURCES, RECS,
+    view: "jobs", jobId: "j1", candId: null, tab: "Overview",
+    jobs: [], cands: [],
+    over: null, showAdd: false, q: "", sort: "score",
+    add: blankAdd(), card: { tech:3, comm:3, culture:3, rec:"Yes", summary:"" }, note: "",
+    jf: blankJob(), jfStages: mkStages("new"), jfQs: [], errs: {},
+    nav: [{id:"jobs",label:"Jobs"},{id:"pipeline",label:"Pipeline"},{id:"candidates",label:"Candidates"},{id:"analytics",label:"Analytics"}],
+
+    init() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+        if (saved && saved.jobs && saved.cands) { this.jobs = saved.jobs; this.cands = saved.cands; return; }
+      } catch (e) { /* ignore, use seed */ }
+      this.jobs = seedJobs(); this.cands = seedCands(this.jobs);
+    },
+    save() { try { localStorage.setItem(STORE_KEY, JSON.stringify({ jobs: this.jobs, cands: this.cands })); } catch (e) {} },
+    resetData() {
+      if (!confirm("Reset all demo data?")) return;
+      try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+      this.jobs = seedJobs(); this.cands = seedCands(this.jobs); this.jobId = "j1"; this.view = "jobs";
+    },
+
+    /* getters */
+    get activeNav() { return this.view === "profile" ? "candidates" : this.view; },
+    get job() { return this.jobs.find((j) => j.id === this.jobId) || this.jobs[0]; },
+    get cand() { return this.cands.find((c) => c.id === this.candId) || null; },
+    get cjob() { return this.cand ? this.jobs.find((j) => j.id === this.cand.jobId) : null; },
+    get filtered() {
+      const q = this.q.toLowerCase();
+      return this.cands.filter((c) => c.name.toLowerCase().includes(q) || c.parsed.some((s) => s.includes(q)))
+        .sort((a, b) => (this.sort === "score" ? b.score - a.score : a.name.localeCompare(b.name)));
+    },
+    get mine() { return this.cand ? this.cand.scorecards.find((s) => s.by === ME) : null; },
+    get others() { return this.cand ? this.cand.scorecards.filter((s) => s.by !== ME) : []; },
+    get allCards() { return this.mine ? [this.mine, ...this.others] : []; },
+    get suggestions() {
+      const m = this.note.match(/@(\w*)$/);
+      return m ? TEAM.filter((t) => t.replace(/\s/g, "").toLowerCase().startsWith(m[1].toLowerCase())) : [];
+    },
+    get stats() {
+      const kinds = BASE.map((b) => b[1]);
+      const n = this.cands.length;
+      const hired = this.cands.filter((c) => this.kindOf(c) === "HIRED").length;
+      const offers = this.cands.filter((c) => this.kindOf(c) === "OFFER").length;
+      const avg = n ? Math.round(this.cands.reduce((a, c) => a + c.score, 0) / n) : 0;
+      const funnel = kinds.map((k) => {
+        const l = this.cands.filter((c) => this.kindOf(c) === k);
+        return { k, label: k[0] + k.slice(1).toLowerCase(), n: l.length, days: l.length ? Math.round(l.reduce((a, c) => a + c.daysInStage, 0) / l.length) : 0 };
+      });
+      const maxN = Math.max(1, ...funnel.map((f) => f.n)), maxD = Math.max(1, ...funnel.map((f) => f.days));
+      funnel.forEach((f) => { f.w = (f.n / maxN) * 100; f.wd = (f.days / maxD) * 100; });
+      const sources = SOURCES.map((s) => {
+        const l = this.cands.filter((c) => c.source === s), h = l.filter((c) => this.kindOf(c) === "HIRED").length;
+        return { s, n: l.length, h, rate: l.length ? Math.round((h / l.length) * 100) : 0 };
+      });
+      return { n, hired, avg, offerRate: offers + hired ? Math.round((hired / (offers + hired)) * 100) + "%" : "–", funnel, sources };
+    },
+
+    /* helpers */
+    kindOf(c) { const j = this.jobs.find((x) => x.id === c.jobId); const s = j && j.stages.find((x) => x.id === c.stageId); return s ? s.kind : ""; },
+    stageName(c) { const j = this.jobs.find((x) => x.id === c.jobId); const s = j && j.stages.find((x) => x.id === c.stageId); return s ? s.name : ""; },
+    candsIn(stageId) { return this.cands.filter((c) => c.jobId === this.jobId && c.stageId === stageId); },
+    jobCounts(j) {
+      const l = this.cands.filter((c) => c.jobId === j.id);
+      const active = l.filter((c) => !["HIRED","REJECTED"].includes(this.kindOf(c))).length;
+      return { active, total: l.length };
+    },
+    tone(s) { return s >= 75 ? "bg-emerald-50 text-emerald-700" : s >= 50 ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"; },
+    peso(n) { return "₱" + Number(n).toLocaleString("en-PH"); },
+    noteParts(body) { return body.split(/(@\w+)/).filter(Boolean).map((t) => ({ t, m: t.startsWith("@") })); },
+    log(c, label) { c.events.unshift({ label, at: stamp() }); },
+    flagText(f) { return f.replace(/^(KILL|FLAG): /, ""); },
+    open(id) { this.candId = id; this.tab = "Overview"; this.view = "profile"; this.card = { tech:3, comm:3, culture:3, rec:"Yes", summary:"" }; this.note = ""; },
+    openJob(id) { this.jobId = id; this.showAdd = false; this.add = blankAdd(); this.view = "pipeline"; },
+
+    /* kanban */
+    drop(stageId, e) { this.over = null; this.move(e.dataTransfer.getData("text/plain"), stageId); },
+    move(id, stageId) {
+      const c = this.cands.find((x) => x.id === id);
+      if (!c || c.stageId === stageId) return;
+      const job = this.jobs.find((j) => j.id === c.jobId);
+      const from = job.stages.find((s) => s.id === c.stageId), to = job.stages.find((s) => s.id === stageId);
+      if (!to) return;
+      c.stageId = stageId; c.daysInStage = 0;
+      this.log(c, `Moved from ${from.name} to ${to.name}`);
+      const tpl = TEMPLATES[to.kind];
+      if (tpl) this.log(c, `Email sent: “${render(tpl, { candidate_name: c.name.split(" ")[0], job_title: job.title })}”`);
+      this.save();
+    },
+    submitAdd() {
+      const f = this.add, job = this.job;
+      if (!f.name.trim() || !f.resume.trim()) return;
+      const a = analyze(f.resume, job);
+      const flags = []; let reject = false;
+      job.questions.forEach((q) => {
+        if ((f.answers[q.id] || "Yes") !== q.mustAnswer) { flags.push(`${q.kill ? "KILL" : "FLAG"}: ${q.label}`); if (q.kill) reject = true; }
+      });
+      const stage = job.stages.find((s) => s.kind === (reject ? "REJECTED" : "APPLIED"));
+      this.cands.unshift({ id: "c" + Date.now(), jobId: job.id, name: f.name.trim(), email: f.email || "n/a@example.com", location: "—", source: f.source, stageId: stage.id, resume: f.resume,
+        ...a, flags, scorecards: [], notes: [], votes: {}, daysInStage: 0,
+        events: [{ label: reject ? "Auto-rejected by kill question" : `Applied via ${f.source} · AI match ${a.score}%`, at: stamp() }] });
+      this.add = blankAdd(); this.showAdd = false; this.save();
+    },
+
+    /* profile */
+    vote(d) { const c = this.cand; c.votes[ME] = d; this.log(c, `${ME} voted to ${d ? "advance" : "pass"}`); this.save(); },
+    votesYes() { return this.cand ? Object.values(this.cand.votes).filter(Boolean).length : 0; },
+    submitCard() {
+      if (!this.card.summary.trim()) return;
+      const c = this.cand; c.scorecards.push({ by: ME, ...this.card });
+      this.log(c, `${ME} submitted a scorecard (${this.card.rec})`);
+      this.card = { tech:3, comm:3, culture:3, rec:"Yes", summary:"" }; this.save();
+    },
+    pickMention(t) { this.note = this.note.replace(/@\w*$/, "@" + t.replace(/\s/g, "") + " "); },
+    postNote() {
+      if (!this.note.trim()) return;
+      const c = this.cand; c.notes.unshift({ by: ME, body: this.note.trim(), at: stamp() });
+      this.log(c, `${ME} added a note`); this.note = ""; this.save();
+    },
+
+    /* job form */
+    startJob() { this.jf = blankJob(); this.jfStages = mkStages("new"); this.jfQs = [{ id: "q1", label: "Are you authorized to work in the Philippines?", kill: true, mustAnswer: "Yes" }]; this.errs = {}; this.view = "newjob"; },
+    lockedStage(k) { return ["APPLIED","OFFER","HIRED","REJECTED"].includes(k); },
+    addStage() { const i = this.jfStages.findIndex((s) => s.kind === "OFFER"); this.jfStages.splice(i, 0, { id: "x" + Date.now(), name: "New interview", kind: "INTERVIEW" }); },
+    addQuestion() { this.jfQs.push({ id: "q" + Date.now(), label: "", kill: false, mustAnswer: "Yes" }); },
+    submitJob(publish) {
+      const v = this.jf, e = {};
+      if (v.title.trim().length < 2) e.title = "Enter a job title";
+      if (!v.department.trim()) e.department = "Enter a department";
+      if (!v.location.trim()) e.location = "Enter a location";
+      if (v.salaryMin && v.salaryMax && Number(v.salaryMin) > Number(v.salaryMax)) e.salaryMax = "Maximum must be at least the minimum";
+      if (this.jfQs.some((q) => !q.label.trim())) e.qs = "Every screening question needs text";
+      this.errs = e;
+      if (Object.keys(e).length) return;
+      const id = "j" + Date.now();
+      this.jobs.unshift({ id, title: v.title.trim(), department: v.department.trim(), location: v.location.trim(), type: v.type,
+        salaryMin: Number(v.salaryMin) || 0, salaryMax: Number(v.salaryMax) || 0,
+        skills: String(v.skills).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean), minYears: Number(v.minYears) || 0, description: v.description,
+        status: publish ? "OPEN" : "DRAFT", stages: this.jfStages.map((s) => ({ ...s, id: `${id}-${s.id}` })), questions: JSON.parse(JSON.stringify(this.jfQs)) });
+      this.jobId = id; this.save(); this.view = "jobs";
+    },
+  };
+}
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased" x-data="ats()" x-cloak>
+
+<!-- Header -->
+<header class="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
+  <div class="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
+    <span class="text-base font-semibold text-teal-800">HireFlow</span>
+    <nav class="flex flex-1 gap-1 overflow-x-auto" aria-label="Main">
+      <template x-for="n in nav" :key="n.id">
+        <button @click="view = n.id" :aria-current="activeNav === n.id ? 'page' : null"
+          :class="activeNav === n.id ? 'bg-teal-50 text-teal-800' : 'text-slate-600 hover:bg-slate-100'"
+          class="whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium" x-text="n.label"></button>
+      </template>
+    </nav>
+    <button class="hidden text-xs text-slate-500 hover:text-slate-800 sm:block" @click="resetData()">Reset demo data</button>
+    <button class="btn-primary" @click="startJob()">New job</button>
+  </div>
+</header>
+
+<main class="mx-auto max-w-7xl p-4 sm:p-6">
+
+  <!-- ───────── Jobs ───────── -->
+  <section x-show="view === 'jobs'">
+    <div class="mb-4 flex items-center justify-between">
+      <h1 class="text-xl font-semibold">Job openings</h1>
+      <button class="btn-ghost" @click="startJob()">Create requisition</button>
+    </div>
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <template x-for="j in jobs" :key="j.id">
+        <button @click="openJob(j.id)" class="card text-left transition hover:border-teal-700">
+          <div class="flex items-start justify-between gap-2">
+            <h2 class="font-semibold" x-text="j.title"></h2>
+            <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="j.status === 'OPEN' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'" x-text="j.status === 'OPEN' ? 'Open' : 'Draft'"></span>
+          </div>
+          <p class="mt-1 text-sm text-slate-500" x-text="`${j.department} · ${j.location} · ${j.type}`"></p>
+          <p class="mt-1 text-sm text-slate-500" x-text="`${peso(j.salaryMin)} – ${peso(j.salaryMax)} / month`"></p>
+          <p class="mt-3 text-sm"><span class="font-semibold tabular-nums" x-text="jobCounts(j).active"></span> active · <span class="tabular-nums" x-text="jobCounts(j).total"></span> total applicants</p>
+        </button>
+      </template>
+    </div>
+  </section>
+
+  <!-- ───────── Pipeline (Kanban) ───────── -->
+  <section x-show="view === 'pipeline'">
+    <div class="mb-4 flex flex-wrap items-center gap-3">
+      <h1 class="text-xl font-semibold">Pipeline</h1>
+      <select aria-label="Job" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm" @change="openJob($event.target.value)">
+        <template x-for="j in jobs" :key="j.id"><option :value="j.id" :selected="j.id === jobId" x-text="j.title"></option></template>
+      </select>
+      <button class="btn-ghost ml-auto" @click="showAdd = !showAdd" x-text="showAdd ? 'Close' : 'Add candidate'"></button>
+    </div>
+
+    <div class="card mb-4" x-show="showAdd" x-cloak>
+      <p class="text-sm font-semibold">Add a candidate — the AI scores the resume text instantly</p>
+      <div class="mt-3 grid gap-3 sm:grid-cols-3">
+        <label class="text-sm font-medium">Full name<input class="field" x-model="add.name"></label>
+        <label class="text-sm font-medium">Email<input class="field" type="email" x-model="add.email"></label>
+        <label class="text-sm font-medium">Source<select class="field" x-model="add.source"><template x-for="s in SOURCES" :key="s"><option x-text="s"></option></template></select></label>
+      </div>
+      <label class="mt-3 block text-sm font-medium">Resume text
+        <textarea rows="3" class="field" placeholder="e.g. 6 years of React and TypeScript, strong testing and CSS…" x-model="add.resume"></textarea>
+      </label>
+      <template x-for="q in job.questions" :key="q.id">
+        <label class="mt-3 block text-sm font-medium"><span x-text="q.label"></span><span x-show="q.kill" class="ml-2 text-xs font-normal text-rose-600">hard requirement</span>
+          <select class="field" @change="add.answers[q.id] = $event.target.value"><option>Yes</option><option>No</option></select>
+        </label>
+      </template>
+      <button class="btn-primary mt-4" @click="submitAdd()" :disabled="!add.name.trim() || !add.resume.trim()">Submit application</button>
+    </div>
+
+    <div class="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-4 sm:mx-0 sm:px-0">
+      <template x-for="s in job.stages" :key="s.id">
+        <section :aria-label="s.name" class="w-72 shrink-0 snap-start rounded-xl bg-slate-100/80 sm:w-80"
+          @dragover.prevent="over = s.id" @dragleave="over = null" @drop.prevent="drop(s.id, $event)">
+          <header class="flex items-center justify-between px-3 pb-2 pt-3">
+            <h2 class="text-sm font-semibold" x-text="s.name"></h2>
+            <span class="text-xs tabular-nums text-slate-500" x-text="candsIn(s.id).length"></span>
+          </header>
+          <div class="flex min-h-28 flex-col gap-2 rounded-b-xl p-2" :class="over === s.id ? 'bg-teal-50 ring-2 ring-inset ring-teal-700/40' : ''">
+            <template x-for="c in candsIn(s.id)" :key="c.id">
+              <article draggable="true" @dragstart="$event.dataTransfer.setData('text/plain', c.id)" class="cursor-grab rounded-lg border border-slate-200 bg-white p-3 shadow-sm active:cursor-grabbing">
+                <div class="flex items-start justify-between gap-2">
+                  <button class="text-left text-sm font-medium hover:underline" @click="open(c.id)" x-text="c.name"></button>
+                  <span class="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums" :class="tone(c.score)" title="AI match score" x-text="c.score + '%'"></span>
+                </div>
+                <p class="mt-1 text-xs text-slate-500"><span x-text="c.source"></span> · <span :class="c.daysInStage > 7 ? 'font-medium text-amber-700' : ''" x-text="c.daysInStage + 'd in stage'"></span></p>
+                <p x-show="c.flags.length" class="mt-1 text-xs font-medium text-rose-700" x-text="c.flags.length + ' screening flag' + (c.flags.length > 1 ? 's' : '')"></p>
+                <!-- Fallback para sa touch devices (hindi gumagana ang HTML5 drag sa mobile) -->
+                <select :aria-label="'Move ' + c.name" class="mt-2 w-full rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600" @change="move(c.id, $event.target.value)">
+                  <template x-for="st in job.stages" :key="st.id"><option :value="st.id" :selected="st.id === c.stageId" x-text="'Move to: ' + st.name"></option></template>
+                </select>
+              </article>
+            </template>
+            <p x-show="candsIn(s.id).length === 0" class="py-6 text-center text-xs text-slate-400">Drag candidates here</p>
+          </div>
+        </section>
+      </template>
+    </div>
+  </section>
+
+  <!-- ───────── Candidates ───────── -->
+  <section x-show="view === 'candidates'">
+    <h1 class="text-xl font-semibold">Candidates</h1>
+    <div class="my-4 flex flex-wrap gap-3">
+      <input aria-label="Search" placeholder="Search by name or skill" class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm sm:w-72" x-model="q">
+      <select aria-label="Sort" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" x-model="sort"><option value="score">Sort by match score</option><option value="name">Sort by name</option></select>
+    </div>
+    <ul class="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+      <template x-for="c in filtered" :key="c.id">
+        <li>
+          <button class="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50" @click="open(c.id)">
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm font-medium" x-text="c.name"></p>
+              <p class="truncate text-xs text-slate-500" x-text="`${jobs.find(j => j.id === c.jobId).title} · ${stageName(c)} · ${c.source}`"></p>
+            </div>
+            <span class="rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums" :class="tone(c.score)" x-text="c.score + '%'"></span>
+          </button>
+        </li>
+      </template>
+      <li x-show="filtered.length === 0" class="p-6 text-center text-sm text-slate-500">No candidates match your search.</li>
+    </ul>
+  </section>
+
+  <!-- ───────── Candidate profile ───────── -->
+  <section x-show="view === 'profile'" class="mx-auto max-w-5xl">
+    <template x-if="cand && cjob">
+      <div>
+        <button class="link mb-3" @click="openJob(cjob.id)">Back to pipeline</button>
+        <header class="card flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div class="flex-1">
+            <h1 class="text-xl font-semibold" x-text="cand.name"></h1>
+            <p class="text-sm text-slate-600" x-text="`${cjob.title} · ${stageName(cand)}`"></p>
+            <p class="mt-1 text-sm text-slate-500" x-text="`${cand.email} · ${cand.location} · via ${cand.source}`"></p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="rounded-full px-3 py-1.5 text-lg font-semibold tabular-nums" :class="tone(cand.score)" x-text="cand.score + '%'"></span>
+            <select aria-label="Stage" class="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" @change="move(cand.id, $event.target.value)">
+              <template x-for="s in cjob.stages" :key="s.id"><option :value="s.id" :selected="s.id === cand.stageId" x-text="s.name"></option></template>
+            </select>
+          </div>
+        </header>
+
+        <div x-show="cand.flags.length" role="alert" class="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+          <p class="font-medium">Screening flags</p>
+          <ul class="mt-1 list-disc pl-5"><template x-for="f in cand.flags" :key="f"><li x-text="flagText(f)"></li></template></ul>
+        </div>
+
+        <div role="tablist" class="mt-6 flex gap-1 overflow-x-auto border-b border-slate-200">
+          <template x-for="t in ['Overview','Scorecards','Notes','Activity']" :key="t">
+            <button role="tab" :aria-selected="tab === t" @click="tab = t"
+              :class="tab === t ? 'border-teal-700 text-teal-800' : 'border-transparent text-slate-500 hover:text-slate-800'"
+              class="-mb-px whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium" x-text="t"></button>
+          </template>
+        </div>
+
+        <div class="mt-6">
+          <!-- Overview -->
+          <div x-show="tab === 'Overview'" class="grid gap-4 lg:grid-cols-3">
+            <div class="space-y-4 lg:col-span-2">
+              <div class="card">
+                <h2 class="text-sm font-semibold">Parsed resume</h2>
+                <p class="mt-2 text-sm text-slate-700" x-text="cand.resume"></p>
+                <p class="mt-3 text-xs text-slate-500" x-text="`Detected experience: ${cand.years} years`"></p>
+                <div class="mt-2 flex flex-wrap gap-1.5"><template x-for="s in cand.parsed" :key="s"><span class="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700" x-text="s"></span></template></div>
+              </div>
+              <div class="card">
+                <h2 class="text-sm font-semibold">Match against job requirements</h2>
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                  <template x-for="s in cand.matched" :key="'m' + s"><span class="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700" x-text="'✓ ' + s"></span></template>
+                  <template x-for="s in cand.missing" :key="'x' + s"><span class="rounded bg-rose-50 px-2 py-0.5 text-xs text-rose-700" x-text="'Missing: ' + s"></span></template>
+                </div>
+                <p class="mt-3 text-xs text-slate-500" x-text="`Job requires ${cjob.minYears}+ years.`"></p>
+              </div>
+            </div>
+            <div class="card">
+              <h2 class="text-sm font-semibold">Team decision</h2>
+              <p class="mt-1 text-xs text-slate-500" x-text="`${votesYes()} of ${Object.keys(cand.votes).length} would advance`"></p>
+              <div class="mt-3 flex gap-2"><button class="btn-primary flex-1" @click="vote(true)">Advance</button><button class="btn-ghost flex-1" @click="vote(false)">Pass</button></div>
+              <p x-show="cand.votes[ME] !== undefined" class="mt-2 text-xs text-slate-500" x-text="'Your vote: ' + (cand.votes[ME] ? 'Advance' : 'Pass')"></p>
+              <ul class="mt-3 space-y-1 text-xs text-slate-600"><template x-for="[u, d] in Object.entries(cand.votes)" :key="u"><li x-text="u + ': ' + (d ? 'Advance' : 'Pass')"></li></template></ul>
+            </div>
+          </div>
+
+          <!-- Scorecards (blind) -->
+          <div x-show="tab === 'Scorecards'" class="space-y-4">
+            <div class="card" x-show="!mine">
+              <p class="text-sm text-slate-600" x-text="`Submit your scorecard to see feedback from ${others.length || 'the other'} interviewer${others.length === 1 ? '' : 's'}. This keeps feedback independent.`"></p>
+              <div class="mt-4 grid gap-4 sm:grid-cols-3">
+                <template x-for="[k, l] in [['tech','Technical skills'],['comm','Communication'],['culture','Team fit']]" :key="k">
+                  <div>
+                    <p class="mb-1 text-sm font-medium" x-text="l"></p>
+                    <div class="flex gap-1" role="radiogroup" :aria-label="l">
+                      <template x-for="n in [1,2,3,4,5]" :key="n">
+                        <button type="button" role="radio" :aria-checked="card[k] === n" @click="card[k] = n"
+                          :class="card[k] === n ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'"
+                          class="h-8 w-8 rounded-md border text-sm" x-text="n"></button>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <label class="mt-4 block text-sm font-medium">Recommendation<select class="field" x-model="card.rec"><template x-for="r in RECS" :key="r"><option x-text="r"></option></template></select></label>
+              <label class="mt-4 block text-sm font-medium">Summary<textarea rows="3" class="field" x-model="card.summary"></textarea></label>
+              <button class="btn-primary mt-4" @click="submitCard()" :disabled="!card.summary.trim()">Submit scorecard</button>
+            </div>
+            <template x-for="s in allCards" :key="s.by">
+              <article class="card">
+                <div class="flex items-center justify-between"><h3 class="text-sm font-semibold" x-text="s.by + (s.by === ME ? ' (you)' : '')"></h3><span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium" x-text="s.rec"></span></div>
+                <p class="mt-2 text-xs text-slate-500" x-text="`Technical ${s.tech}/5 · Communication ${s.comm}/5 · Team fit ${s.culture}/5`"></p>
+                <p class="mt-2 text-sm text-slate-700" x-text="s.summary"></p>
+              </article>
+            </template>
+          </div>
+
+          <!-- Notes -->
+          <div x-show="tab === 'Notes'" class="space-y-4">
+            <div class="relative">
+              <label for="note" class="sr-only">Add a note</label>
+              <textarea id="note" rows="3" class="field mt-0" placeholder="Write a note. Type @ to mention a teammate." x-model="note"></textarea>
+              <ul x-show="suggestions.length" class="absolute z-10 mt-1 w-56 rounded-md border border-slate-200 bg-white py-1 shadow-lg">
+                <template x-for="t in suggestions" :key="t"><li><button class="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50" @click="pickMention(t)" x-text="t"></button></li></template>
+              </ul>
+              <button class="btn-primary mt-2" @click="postNote()" :disabled="!note.trim()">Post note</button>
+            </div>
+            <template x-for="(n, i) in cand.notes" :key="i">
+              <article class="card">
+                <p class="text-xs text-slate-500"><span class="font-medium text-slate-800" x-text="n.by"></span> · <span x-text="n.at"></span></p>
+                <p class="mt-1 text-sm"><template x-for="(p, j) in noteParts(n.body)" :key="j"><span :class="p.m ? 'rounded bg-teal-50 px-1 font-medium text-teal-800' : ''" x-text="p.t"></span></template></p>
+              </article>
+            </template>
+            <p x-show="cand.notes.length === 0" class="text-sm text-slate-500">No notes yet. Share context with the hiring team.</p>
+          </div>
+
+          <!-- Activity -->
+          <ol x-show="tab === 'Activity'" class="ml-2 space-y-4 border-l border-slate-200 pl-5">
+            <template x-for="(e, i) in cand.events" :key="i">
+              <li class="relative"><span class="absolute -left-[26px] top-1.5 h-2 w-2 rounded-full bg-teal-700"></span><p class="text-sm" x-text="e.label"></p><p class="text-xs text-slate-500" x-text="e.at"></p></li>
+            </template>
+          </ol>
+        </div>
+      </div>
+    </template>
+  </section>
+
+  <!-- ───────── New job requisition ───────── -->
+  <section x-show="view === 'newjob'" class="mx-auto max-w-3xl space-y-4">
+    <h1 class="text-xl font-semibold">New job requisition</h1>
+    <div class="card">
+      <h2 class="text-sm font-semibold">Role details</h2>
+      <div class="mt-3 grid gap-3 sm:grid-cols-2">
+        <label class="text-sm font-medium">Job title<input class="field" x-model="jf.title"><span class="err" x-text="errs.title"></span></label>
+        <label class="text-sm font-medium">Department<input class="field" x-model="jf.department"><span class="err" x-text="errs.department"></span></label>
+        <label class="text-sm font-medium">Location<input class="field" x-model="jf.location"><span class="err" x-text="errs.location"></span></label>
+        <label class="text-sm font-medium">Employment type<select class="field" x-model="jf.type"><option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option></select></label>
+        <label class="text-sm font-medium">Salary minimum (₱/month)<input type="number" min="0" class="field" x-model="jf.salaryMin"></label>
+        <label class="text-sm font-medium">Salary maximum (₱/month)<input type="number" min="0" class="field" x-model="jf.salaryMax"><span class="err" x-text="errs.salaryMax"></span></label>
+        <label class="text-sm font-medium">Required skills (comma-separated)<input class="field" placeholder="react, typescript, sql" x-model="jf.skills"></label>
+        <label class="text-sm font-medium">Minimum years of experience<input type="number" min="0" class="field" x-model="jf.minYears"></label>
+      </div>
+      <label class="mt-3 block text-sm font-medium">Description<textarea rows="4" class="field" x-model="jf.description"></textarea></label>
+      <p class="mt-2 text-xs text-slate-500">Skills and years of experience drive the AI match score for every applicant.</p>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between"><h2 class="text-sm font-semibold">Pipeline stages</h2><button class="link" @click="addStage()">Add interview stage</button></div>
+      <ul class="mt-3 space-y-2">
+        <template x-for="(s, i) in jfStages" :key="s.id">
+          <li class="flex items-center gap-2">
+            <input aria-label="Stage name" class="field mt-0" x-model="s.name">
+            <button class="text-sm text-slate-500 hover:text-rose-700 disabled:opacity-30" :disabled="lockedStage(s.kind)" @click="jfStages.splice(i, 1)">Remove</button>
+          </li>
+        </template>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="flex items-center justify-between"><h2 class="text-sm font-semibold">Screening questions</h2><button class="link" @click="addQuestion()">Add question</button></div>
+      <p class="err" x-text="errs.qs"></p>
+      <div class="mt-3 space-y-3">
+        <template x-for="(q, i) in jfQs" :key="q.id">
+          <div class="rounded-lg border border-slate-200 p-3">
+            <input aria-label="Question" placeholder="Yes/No question" class="field mt-0" x-model="q.label">
+            <div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-700">
+              <label class="flex items-center gap-2"><input type="checkbox" x-model="q.kill"> Hard requirement (auto-reject)</label>
+              <label class="flex items-center gap-2">Must answer <select class="rounded border border-slate-300 px-2 py-1" x-model="q.mustAnswer"><option>Yes</option><option>No</option></select></label>
+              <button class="ml-auto text-slate-500 hover:text-rose-700" @click="jfQs.splice(i, 1)">Remove</button>
+            </div>
+          </div>
+        </template>
+      </div>
+      <p class="mt-2 text-xs text-slate-500">Without “Hard requirement”, a wrong answer only flags the candidate for review.</p>
+    </div>
+
+    <div class="flex justify-end gap-2">
+      <button class="btn-ghost" @click="view = 'jobs'">Cancel</button>
+      <button class="btn-ghost" @click="submitJob(false)">Save draft</button>
+      <button class="btn-primary" @click="submitJob(true)">Publish job</button>
+    </div>
+  </section>
+
+  <!-- ───────── Analytics ───────── -->
+  <section x-show="view === 'analytics'" class="space-y-4">
+    <h1 class="text-xl font-semibold">Analytics</h1>
+    <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div class="card"><p class="text-xs text-slate-500">Total applicants</p><p class="mt-1 text-2xl font-semibold tabular-nums" x-text="stats.n"></p></div>
+      <div class="card"><p class="text-xs text-slate-500">Hires</p><p class="mt-1 text-2xl font-semibold tabular-nums" x-text="stats.hired"></p></div>
+      <div class="card"><p class="text-xs text-slate-500">Average match score</p><p class="mt-1 text-2xl font-semibold tabular-nums" x-text="stats.avg + '%'"></p></div>
+      <div class="card"><p class="text-xs text-slate-500">Offer → hire rate</p><p class="mt-1 text-2xl font-semibold tabular-nums" x-text="stats.offerRate"></p></div>
+    </div>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="card">
+        <h2 class="text-sm font-semibold">Pipeline funnel</h2>
+        <ul class="mt-3 space-y-2">
+          <template x-for="f in stats.funnel" :key="f.k">
+            <li class="flex items-center gap-3 text-sm"><span class="w-20 text-slate-600" x-text="f.label"></span>
+              <div class="h-3 flex-1 rounded bg-slate-100"><div class="h-3 rounded bg-teal-700" :style="`width:${f.w}%`"></div></div>
+              <span class="w-6 text-right tabular-nums" x-text="f.n"></span></li>
+          </template>
+        </ul>
+      </div>
+      <div class="card">
+        <h2 class="text-sm font-semibold">Average days in stage (bottlenecks)</h2>
+        <ul class="mt-3 space-y-2">
+          <template x-for="f in stats.funnel.slice(0, 4)" :key="f.k">
+            <li class="flex items-center gap-3 text-sm"><span class="w-20 text-slate-600" x-text="f.label"></span>
+              <div class="h-3 flex-1 rounded bg-slate-100"><div class="h-3 rounded" :class="f.days > 7 ? 'bg-amber-600' : 'bg-slate-500'" :style="`width:${f.wd}%`"></div></div>
+              <span class="w-8 text-right tabular-nums" x-text="f.days + 'd'"></span></li>
+          </template>
+        </ul>
+      </div>
+      <div class="card lg:col-span-2">
+        <h2 class="text-sm font-semibold">Source effectiveness</h2>
+        <div class="overflow-x-auto">
+          <table class="mt-3 w-full text-sm">
+            <thead><tr class="text-left text-xs text-slate-500"><th class="py-1 font-medium">Source</th><th class="font-medium">Applicants</th><th class="font-medium">Hires</th><th class="font-medium">Hire rate</th></tr></thead>
+            <tbody><template x-for="r in stats.sources" :key="r.s"><tr class="border-t border-slate-100"><td class="py-2" x-text="r.s"></td><td class="tabular-nums" x-text="r.n"></td><td class="tabular-nums" x-text="r.h"></td><td class="tabular-nums" x-text="r.rate + '%'"></td></tr></template></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
